@@ -97,3 +97,14 @@ starlink-taphome-bridge run --help
 starlink-taphome-bridge topics --topic-prefix taphome/starlink
 starlink-taphome-bridge version
 ```
+
+## Development Notes
+
+- The Starlink integration requires a `starlink_grpc` Python module. The default dependency is
+  `starlink-grpc-core` in `pyproject.toml`. If you use a GitHub fork instead, replace the
+  dependency with a direct git URL that provides the `starlink_grpc` module.
+- If you run the CLI directly from source without installing the package, use:
+
+```sh
+PYTHONPATH=src uv run python -m starlink_taphome_bridge.cli run --help
+```

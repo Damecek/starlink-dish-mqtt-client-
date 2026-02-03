@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Iterable
 
 from gmqtt import Client as MqttClient
+from gmqtt import Message as MqttMessage
 
 from starlink_taphome_bridge.models import AppliedResult, Telemetry
 
@@ -100,7 +101,8 @@ class MqttBridge:
         self._on_command = on_command
         self._publish_json = publish_json
         self._publish_missing = publish_missing
-        self._client = MqttClient(config.client_id)
+        will_message = MqttMessage(self._topics.status, "offline", qos=config.qos, retain=True)
+        self._client = MqttClient(config.client_id, will_message=will_message)
         self._connected = asyncio.Event()
         self._disconnected = asyncio.Event()
         self._last_payloads: dict[str, tuple[str, int | None, bool]] = {}
@@ -115,9 +117,6 @@ class MqttBridge:
                 certfile=self._config.cert_file,
                 keyfile=self._config.key_file,
             )
-        self._client.set_will_message(
-            self._topics.status, "offline", qos=self._config.qos, retain=True
-        )
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
         self._client.on_disconnect = self._on_disconnect
@@ -140,6 +139,8 @@ class MqttBridge:
     async def publish(self, topic: str, payload: str, retain: bool | None = None) -> None:
         retain_flag = self._config.retain if retain is None else retain
         self._last_payloads[topic] = (payload, self._config.qos, retain_flag)
+        if not self._client.is_connected:
+            return
         self._client.publish(topic, payload, qos=self._config.qos, retain=retain_flag)
 
     async def publish_telemetry(self, telemetry: Telemetry) -> None:
@@ -179,7 +180,8 @@ class MqttBridge:
         if value is None and not self._publish_missing:
             return
         payload = "" if value is None else str(value)
-        self._client.publish(topic, payload, qos=self._config.qos, retain=self._config.retain)
+        if self._client.is_connected:
+            self._client.publish(topic, payload, qos=self._config.qos, retain=self._config.retain)
         self._last_payloads[topic] = (payload, self._config.qos, self._config.retain)
 
     def _on_connect(self, client: MqttClient, flags: dict[str, Any], rc: int, properties: Any) -> None:

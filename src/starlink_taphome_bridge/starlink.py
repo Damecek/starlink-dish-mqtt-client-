@@ -35,12 +35,13 @@ class StarlinkGrpcClient(StarlinkClient):
     def __init__(self, config: StarlinkConfig) -> None:
         super().__init__(config)
         try:
-            from starlink_grpc import starlink_grpc  # type: ignore
+            import starlink_grpc  # type: ignore
         except ImportError as exc:
             raise StarlinkClientError(
-                "starlink-grpc-tools is required for Starlink integration"
+                "starlink-grpc package is required for Starlink integration"
             ) from exc
-        self._starlink_grpc = starlink_grpc
+        # Support both module-style and package-style layouts.
+        self._starlink_grpc = getattr(starlink_grpc, "starlink_grpc", starlink_grpc)
 
     async def get_telemetry(self) -> Telemetry:
         return await asyncio.to_thread(self._get_telemetry_sync)
@@ -74,7 +75,10 @@ class StarlinkGrpcClient(StarlinkClient):
         if client is not None:
             return client.get_status()
         if hasattr(self._starlink_grpc, "get_status"):
-            return self._starlink_grpc.get_status(host=self._config.host, port=self._config.port)
+            try:
+                return self._starlink_grpc.get_status(host=self._config.host, port=self._config.port)
+            except TypeError:
+                return self._starlink_grpc.get_status()
         raise StarlinkClientError("Unable to locate starlink_grpc.get_status implementation")
 
     def _maybe_client(self) -> Any | None:
@@ -93,10 +97,16 @@ class StarlinkGrpcClient(StarlinkClient):
                 client.set_dish_heater(mode)
                 return mode
         if hasattr(self._starlink_grpc, "set_heater_mode"):
-            self._starlink_grpc.set_heater_mode(mode, host=self._config.host, port=self._config.port)
+            try:
+                self._starlink_grpc.set_heater_mode(mode, host=self._config.host, port=self._config.port)
+            except TypeError:
+                self._starlink_grpc.set_heater_mode(mode)
             return mode
         if hasattr(self._starlink_grpc, "set_dish_heater"):
-            self._starlink_grpc.set_dish_heater(mode, host=self._config.host, port=self._config.port)
+            try:
+                self._starlink_grpc.set_dish_heater(mode, host=self._config.host, port=self._config.port)
+            except TypeError:
+                self._starlink_grpc.set_dish_heater(mode)
             return mode
         raise StarlinkClientError("Unable to locate starlink_grpc heater control API")
 
