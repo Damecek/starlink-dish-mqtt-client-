@@ -14,7 +14,7 @@ import click
 
 from starlink_taphome_bridge import __version__
 from starlink_taphome_bridge.logging import configure_logging
-from starlink_taphome_bridge.models import AppliedResult, Telemetry
+from starlink_taphome_bridge.models import AppliedResult
 from starlink_taphome_bridge.mqtt_bridge import Backoff, MqttBridge, MqttConfig, Topics
 from starlink_taphome_bridge.starlink import StarlinkConfig, StarlinkGrpcClient
 
@@ -33,6 +33,7 @@ class RunConfig:
     dish: StarlinkConfig
     backoff_min: float
     backoff_max: float
+    field_filters: tuple[str, ...]
 
 
 def _default_client_id() -> str:
@@ -50,6 +51,17 @@ def _normalize_heater_mode(value: str) -> str:
     if lowered == "auto":
         return "auto"
     raise ValueError(f"Invalid heater mode: {value}")
+
+
+def _normalize_fields(values: tuple[str, ...]) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for raw in values:
+        for chunk in raw.split(","):
+            value = chunk.strip().replace("/", ".")
+            if not value:
+                continue
+            normalized.append(value.strip("."))
+    return tuple(normalized)
 
 
 async def _run_bridge(config: RunConfig) -> None:
@@ -79,6 +91,7 @@ async def _run_bridge(config: RunConfig) -> None:
         on_command=on_command,
         publish_json=config.publish_json,
         publish_missing=config.publish_missing,
+        field_filters=config.field_filters,
     )
 
     mqtt_backoff = Backoff(config.backoff_min, config.backoff_max)
@@ -160,6 +173,12 @@ def main() -> None:
 @click.option("--json", "publish_json", is_flag=True, default=False, show_default=True)
 @click.option("--retain/--no-retain", default=True, show_default=True)
 @click.option("--publish-missing", is_flag=True, default=False, show_default=True)
+@click.option(
+    "--field",
+    "fields",
+    multiple=True,
+    help="Publish only selected gRPC fields (repeatable). Example: --field device_state.uptime_s",
+)
 @click.option("--dish-host", default="192.168.100.1", show_default=True)
 @click.option("--dish-port", default=9200, show_default=True, type=int)
 @click.option("--backoff-min", default=1.0, show_default=True, type=float)
@@ -196,6 +215,7 @@ def run(**kwargs: Any) -> None:
         dish=StarlinkConfig(host=kwargs["dish_host"], port=kwargs["dish_port"]),
         backoff_min=kwargs["backoff_min"],
         backoff_max=kwargs["backoff_max"],
+        field_filters=_normalize_fields(kwargs["fields"]),
     )
     if not daemon:
         asyncio.run(_run_bridge(config))
@@ -213,12 +233,8 @@ def topics(topic_prefix: str) -> None:
     topics = Topics(prefix=topic_prefix)
     for topic in (
         topics.status,
-        topics.telemetry_power,
-        topics.telemetry_latency,
-        topics.telemetry_heater,
-        topics.telemetry_uptime,
-        topics.telemetry_last_update,
-        topics.telemetry_all,
+        f"{topic_prefix}/<grpc-field>",
+        topics.all_fields,
         topics.cmd_heater_set,
         topics.cmd_heater_ack,
     ):

@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 
 
 @dataclass(slots=True)
 class Telemetry:
-    power_w: float | None = None
-    latency_ms: float | None = None
-    heater_mode: str | None = None
-    uptime_s: int | None = None
+    fields: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return dict(self.fields)
 
 
 @dataclass(slots=True)

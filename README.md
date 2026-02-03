@@ -5,7 +5,7 @@ for TapHome, while also listening for heater (snow-melt) commands.
 
 ## Features
 
-- Periodic async telemetry polling (power, latency, heater mode, uptime).
+- Periodic async polling of Starlink gRPC fields (field names match gRPC).
 - MQTT retained telemetry topics for TapHome.
 - Command subscription for heater mode with acknowledgements.
 - `--once` one-shot mode or long-running daemon mode.
@@ -15,13 +15,9 @@ for TapHome, while also listening for heater (snow-melt) commands.
 
 Default prefix: `taphome/starlink`
 
-Telemetry (retained):
-- `{prefix}/telemetry/power_w` (float)
-- `{prefix}/telemetry/latency_ms` (float)
-- `{prefix}/telemetry/heater_mode` (string)
-- `{prefix}/telemetry/uptime_s` (int)
-- `{prefix}/telemetry/last_update_ts` (int)
-- `{prefix}/telemetry/all` (JSON, optional with `--json`)
+Telemetry (retained, gRPC field names):
+- `{prefix}/<grpc-field>` (path format `{prefix}/field` or `{prefix}/nested/field`)
+- `{prefix}/all` (JSON of published fields, optional with `--json`)
 
 Commands:
 - `{prefix}/cmd/heater_mode/set` payload: `off|on|auto` (also accepts `0/1`, `true/false`)
@@ -55,11 +51,10 @@ uvx --from starlink-taphome-bridge==0.1.0 starlink-taphome-bridge run --once
 
 | Topic | Payload | Notes |
 | --- | --- | --- |
-| `taphome/starlink/telemetry/power_w` | float | watts |
-| `taphome/starlink/telemetry/latency_ms` | float | milliseconds |
-| `taphome/starlink/telemetry/heater_mode` | string | `off`, `on`, or `auto` |
-| `taphome/starlink/telemetry/uptime_s` | int | uptime seconds |
-| `taphome/starlink/telemetry/last_update_ts` | int | unix epoch |
+| `taphome/starlink/pop_ping_latency_ms` | float | milliseconds |
+| `taphome/starlink/device_state/uptime_s` | int | uptime seconds |
+| `taphome/starlink/dish_config/snow_melt_mode` | string | `AUTO`, `ALWAYS_ON`, `ALWAYS_OFF` |
+| `taphome/starlink/all` | json | published fields snapshot |
 | `taphome/starlink/status` | string | `online`/`offline` |
 
 ## OpenRC Service (Alpine)
@@ -98,11 +93,22 @@ starlink-taphome-bridge topics --topic-prefix taphome/starlink
 starlink-taphome-bridge version
 ```
 
+Filter published fields:
+
+```sh
+starlink-taphome-bridge run \
+  --field device_state.uptime_s \
+  --field dish_config.snow_melt_mode \
+  --field device_info \
+  --field device_state
+```
+
 ## Development Notes
 
-- The Starlink integration requires a `starlink_grpc` Python module. The default dependency is
-  `starlink-grpc-core` in `pyproject.toml`. If you use a GitHub fork instead, replace the
-  dependency with a direct git URL that provides the `starlink_grpc` module.
+- The Starlink integration requires the `starlink-client` Python package (local gRPC access).
+  The default dependency is `starlink-client` in `pyproject.toml`. If you use a GitHub fork
+  instead, replace the dependency with a direct git URL that provides the `starlink_client`
+  package.
 - If you run the CLI directly from source without installing the package, use:
 
 ```sh

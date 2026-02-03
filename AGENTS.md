@@ -37,6 +37,6 @@ This is a living document. Update it as the project evolves and new workflows, c
   - Example command(s) to validate the change.
 
 ## Configuration & Safety Notes
-- Configuration is CLI-driven (see `--mqtt-host`, `--topic-prefix`, and `--interval`). Avoid hardcoding secrets.
-- MQTT topics and retained message behavior are documented in `README.md` and should remain backward compatible.
-- Starlink integration depends on a `starlink_grpc` module; ensure the dependency provides that import.
+- Configuration is CLI-driven (see `--mqtt-host`, `--topic-prefix`, `--interval`, and `--field`). Avoid hardcoding secrets.
+- MQTT topics and retained message behavior are documented in `README.md` and follow gRPC field names.
+- Starlink integration depends on the `starlink_client` package; ensure the dependency provides that import.

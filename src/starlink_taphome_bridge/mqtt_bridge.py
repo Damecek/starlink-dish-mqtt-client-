@@ -24,28 +24,11 @@ class Topics:
         return f"{self.prefix}/status"
 
     @property
-    def telemetry_power(self) -> str:
-        return f"{self.prefix}/telemetry/power_w"
+    def all_fields(self) -> str:
+        return f"{self.prefix}/all"
 
-    @property
-    def telemetry_latency(self) -> str:
-        return f"{self.prefix}/telemetry/latency_ms"
-
-    @property
-    def telemetry_heater(self) -> str:
-        return f"{self.prefix}/telemetry/heater_mode"
-
-    @property
-    def telemetry_uptime(self) -> str:
-        return f"{self.prefix}/telemetry/uptime_s"
-
-    @property
-    def telemetry_last_update(self) -> str:
-        return f"{self.prefix}/telemetry/last_update_ts"
-
-    @property
-    def telemetry_all(self) -> str:
-        return f"{self.prefix}/telemetry/all"
+    def field(self, path: str) -> str:
+        return f"{self.prefix}/{path}"
 
     @property
     def cmd_heater_set(self) -> str:
@@ -95,12 +78,15 @@ class MqttBridge:
         on_command: Callable[[str], Awaitable[AppliedResult]],
         publish_json: bool,
         publish_missing: bool,
+        field_filters: Iterable[str],
     ) -> None:
         self._config = config
         self._topics = topics
         self._on_command = on_command
         self._publish_json = publish_json
         self._publish_missing = publish_missing
+        self._field_filters = tuple(self._normalize_filter(value) for value in field_filters if value)
+        self._warned_filters: set[str] = set()
         will_message = MqttMessage(self._topics.status, "offline", qos=config.qos, retain=True)
         self._client = MqttClient(config.client_id, will_message=will_message)
         self._connected = asyncio.Event()
@@ -145,23 +131,21 @@ class MqttBridge:
 
     async def publish_telemetry(self, telemetry: Telemetry) -> None:
         now_ts = int(time.time())
-        await self.publish(self._topics.telemetry_last_update, str(now_ts))
-
-        data: dict[str, Any] = {
-            "power_w": telemetry.power_w,
-            "latency_ms": telemetry.latency_ms,
-            "heater_mode": telemetry.heater_mode,
-            "uptime_s": telemetry.uptime_s,
-            "last_update_ts": now_ts,
+        flat_fields = self._flatten_fields(telemetry.to_dict())
+        self._warn_unknown_filters(flat_fields)
+        filtered_fields = {
+            key: value for key, value in flat_fields.items() if self._should_publish(key)
         }
-
-        self._publish_if_value(self._topics.telemetry_power, telemetry.power_w)
-        self._publish_if_value(self._topics.telemetry_latency, telemetry.latency_ms)
-        self._publish_if_value(self._topics.telemetry_heater, telemetry.heater_mode)
-        self._publish_if_value(self._topics.telemetry_uptime, telemetry.uptime_s)
+        for path, value in filtered_fields.items():
+            topic = self._topics.field(path.replace(".", "/"))
+            self._publish_if_value(topic, value)
 
         if self._publish_json:
-            await self.publish(self._topics.telemetry_all, json.dumps(data, separators=(",", ":")))
+            payload = json.dumps(
+                {"fields": filtered_fields, "timestamp": now_ts},
+                separators=(",", ":"),
+            )
+            await self.publish(self._topics.all_fields, payload)
 
     async def publish_ack(self, result: AppliedResult) -> None:
         payload = json.dumps(
@@ -179,10 +163,47 @@ class MqttBridge:
     def _publish_if_value(self, topic: str, value: Any) -> None:
         if value is None and not self._publish_missing:
             return
-        payload = "" if value is None else str(value)
+        if isinstance(value, (dict, list)):
+            payload = json.dumps(value, separators=(",", ":"))
+        else:
+            payload = "" if value is None else str(value)
         if self._client.is_connected:
             self._client.publish(topic, payload, qos=self._config.qos, retain=self._config.retain)
         self._last_payloads[topic] = (payload, self._config.qos, self._config.retain)
+
+    def _flatten_fields(self, data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in data.items():
+            path = f"{prefix}.{key}" if prefix else key
+            if isinstance(value, dict):
+                nested = self._flatten_fields(value, path)
+                if nested:
+                    result.update(nested)
+                else:
+                    result[path] = {}
+                continue
+            result[path] = value
+        return result
+
+    def _normalize_filter(self, value: str) -> str:
+        normalized = value.strip().replace("/", ".")
+        return normalized.strip(".")
+
+    def _should_publish(self, path: str) -> bool:
+        if not self._field_filters:
+            return True
+        return any(path == filt or path.startswith(f"{filt}.") for filt in self._field_filters)
+
+    def _warn_unknown_filters(self, flat_fields: dict[str, Any]) -> None:
+        if not self._field_filters:
+            return
+        for filt in self._field_filters:
+            if filt in self._warned_filters:
+                continue
+            if any(path == filt or path.startswith(f"{filt}.") for path in flat_fields):
+                continue
+            logger.warning("Requested gRPC field filter not found: %s", filt)
+            self._warned_filters.add(filt)
 
     def _on_connect(self, client: MqttClient, flags: dict[str, Any], rc: int, properties: Any) -> None:
         logger.info("Connected to MQTT broker")
@@ -214,12 +235,7 @@ class MqttBridge:
     def iter_topics(self) -> Iterable[str]:
         return (
             self._topics.status,
-            self._topics.telemetry_power,
-            self._topics.telemetry_latency,
-            self._topics.telemetry_heater,
-            self._topics.telemetry_uptime,
-            self._topics.telemetry_last_update,
-            self._topics.telemetry_all,
+            self._topics.all_fields,
             self._topics.cmd_heater_set,
             self._topics.cmd_heater_ack,
         )
