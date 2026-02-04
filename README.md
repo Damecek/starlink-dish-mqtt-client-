@@ -9,7 +9,7 @@ for TapHome, while also listening for heater (snow-melt) commands.
 - MQTT retained telemetry topics for TapHome.
 - Command subscription for heater mode with acknowledgements.
 - `--once` one-shot mode or long-running daemon mode.
-- Alpine-friendly (uv/uvx compatible).
+- Alpine-friendly (uv compatible).
 
 ## Topics
 
@@ -33,29 +33,34 @@ apk add --no-cache python3 py3-pip
 pip install --user uv
 ```
 
-Install and run (using `uvx`):
+Run from this repo with `uv`:
 
 ```sh
-uvx starlink-taphome-bridge run --once \
-  --mqtt-host 192.168.1.10 \
-  --topic-prefix taphome/starlink
+uv run starlink-taphome-bridge run --once \
+  --mqtt-host 192.168.68.200 --mqtt-port 1883 \
+  --mqtt-username taphome --mqtt-password pass \
+  --topic-prefix starlink \
+  --dish-host 192.168.100.1 --dish-port 9200 \
+  --all-fields \
+  --log-level DEBUG
 ```
 
-For a pinned version:
+Run `topics` and `version` commands:
 
 ```sh
-uvx --from starlink-taphome-bridge==0.1.0 starlink-taphome-bridge run --once
+uv run starlink-taphome-bridge topics --topic-prefix starlink
+uv run starlink-taphome-bridge version
 ```
 
 ## Example TapHome MQTT Mapping
 
 | Topic | Payload | Notes |
 | --- | --- | --- |
-| `taphome/starlink/pop_ping_latency_ms` | float | milliseconds |
-| `taphome/starlink/device_state/uptime_s` | int | uptime seconds |
-| `taphome/starlink/dish_config/snow_melt_mode` | string | `AUTO`, `ALWAYS_ON`, `ALWAYS_OFF` |
-| `taphome/starlink/all` | json | published fields snapshot |
-| `taphome/starlink/status` | string | `online`/`offline` |
+| `starlink/pop_ping_latency_ms` | float | milliseconds |
+| `starlink/device_state/uptime_s` | int | uptime seconds |
+| `starlink/dish_config/snow_melt_mode` | string | `AUTO`, `ALWAYS_ON`, `ALWAYS_OFF` |
+| `starlink/all` | json | published fields snapshot |
+| `starlink/status` | string | `online`/`offline` |
 
 ## OpenRC Service (Alpine)
 
@@ -64,8 +69,8 @@ Save as `/etc/init.d/starlink-taphome-bridge`:
 ```sh
 #!/sbin/openrc-run
 
-command="/usr/bin/uvx"
-command_args="starlink-taphome-bridge run --daemon --interval 10 --mqtt-host 192.168.1.10"
+command="/usr/bin/uv"
+command_args="run starlink-taphome-bridge run --daemon --interval 10 --mqtt-host 192.168.68.200 --mqtt-port 1883 --mqtt-username taphome --mqtt-password pass --topic-prefix starlink --dish-host 192.168.100.1 --dish-port 9200 --all-fields --log-level DEBUG"
 command_background="yes"
 pidfile="/run/starlink-taphome-bridge.pid"
 
@@ -88,25 +93,45 @@ rc-service starlink-taphome-bridge start
 ## Usage
 
 ```sh
-starlink-taphome-bridge run --help
-starlink-taphome-bridge topics --topic-prefix taphome/starlink
-starlink-taphome-bridge version
+uv run starlink-taphome-bridge run --help
+uv run starlink-taphome-bridge topics --topic-prefix starlink
+uv run starlink-taphome-bridge version
 ```
 
 Filter published fields:
 
 ```sh
-starlink-taphome-bridge run \
+uv run starlink-taphome-bridge run --once \
+  --mqtt-host 192.168.68.200 --mqtt-port 1883 \
+  --mqtt-username taphome --mqtt-password pass \
+  --topic-prefix starlink \
+  --dish-host 192.168.100.1 --dish-port 9200 \
+  --log-level DEBUG \
   --field device_state.uptime_s \
   --field dish_config.snow_melt_mode \
   --field device_info \
   --field device_state
 ```
 
+Publish all available gRPC fields explicitly:
+
+```sh
+uv run starlink-taphome-bridge run --once \
+  --mqtt-host 192.168.68.200 --mqtt-port 1883 \
+  --mqtt-username taphome --mqtt-password pass \
+  --topic-prefix starlink \
+  --dish-host 192.168.100.1 --dish-port 9200 \
+  --all-fields \
+  --log-level DEBUG
+```
+
+Notes:
+- Without any `--field`, all available fields are already published.
+- `--all-fields` is useful when you want to override a templated command that normally includes `--field`.
+
 ## Development Notes
 
-- If you want to run the CLI from this repo using `uv` (and the entrypoint in
-  `pyproject.toml`), install the project into the local venv first:
+- If you want to run the package entrypoint from this repo, install it into the local venv first:
 
 ```sh
 uv sync
@@ -123,8 +148,8 @@ uv run --with-editable . starlink-taphome-bridge run --help
   The default dependency is `starlink-client` in `pyproject.toml`. If you use a GitHub fork
   instead, replace the dependency with a direct git URL that provides the `starlink_client`
   package.
-- If you run the CLI directly from source without installing the package, use:
+- If you prefer module execution instead of the package entrypoint, use:
 
 ```sh
-PYTHONPATH=src uv run python -m starlink_taphome_bridge.cli run --help
+uv run python -m starlink_taphome_bridge.cli run --help
 ```

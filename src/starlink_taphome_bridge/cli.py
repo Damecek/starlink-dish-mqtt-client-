@@ -179,6 +179,13 @@ def main() -> None:
     multiple=True,
     help="Publish only selected gRPC fields (repeatable). Example: --field device_state.uptime_s",
 )
+@click.option(
+    "--all-fields",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help="Publish all available gRPC fields (cannot be used with --field).",
+)
 @click.option("--dish-host", default="192.168.100.1", show_default=True)
 @click.option("--dish-port", default=9200, show_default=True, type=int)
 @click.option("--backoff-min", default=1.0, show_default=True, type=float)
@@ -189,6 +196,8 @@ def run(**kwargs: Any) -> None:
     client_id = kwargs["mqtt_client_id"] or _default_client_id()
     once = kwargs["once"]
     daemon = kwargs["daemon"]
+    if kwargs["all_fields"] and kwargs["fields"]:
+        raise click.UsageError("Options --all-fields and --field cannot be used together.")
     if once:
         daemon = False
     config = RunConfig(
@@ -215,7 +224,7 @@ def run(**kwargs: Any) -> None:
         dish=StarlinkConfig(host=kwargs["dish_host"], port=kwargs["dish_port"]),
         backoff_min=kwargs["backoff_min"],
         backoff_max=kwargs["backoff_max"],
-        field_filters=_normalize_fields(kwargs["fields"]),
+        field_filters=() if kwargs["all_fields"] else _normalize_fields(kwargs["fields"]),
     )
     if not daemon:
         asyncio.run(_run_bridge(config))
