@@ -1,13 +1,13 @@
 # Starlink TapHome MQTT Bridge
 
 `starlink-taphome-bridge` is a Python CLI that polls Starlink Dish telemetry and publishes it to MQTT
-for TapHome, while also listening for heater (snow-melt) commands.
+for TapHome, while also listening for MQTT `/set` commands and applying writable fields to Starlink.
 
 ## Features
 
 - Periodic async polling of Starlink gRPC fields (field names match gRPC).
 - MQTT retained telemetry topics for TapHome.
-- Command subscription for heater mode with acknowledgements.
+- Generic `/set` command subscription derived from MQTT topic path.
 - `--once` one-shot mode or long-running daemon mode.
 - Alpine-friendly (uv compatible).
 
@@ -20,8 +20,12 @@ Telemetry (retained, gRPC field names):
 - `{prefix}/all` (JSON of published fields, optional with `--json`)
 
 Commands:
-- `{prefix}/cmd/heater_mode/set` payload: `off|on|auto` (also accepts `0/1`, `true/false`)
-- `{prefix}/cmd/heater_mode/ack` JSON acknowledgement payload
+- `{prefix}/<grpc-field>/set` payload: value to write via gRPC (example: `AUTO`)
+- `{prefix}/<grpc-field>/ack` JSON acknowledgement payload
+
+Example:
+- `starlink/dish_config/snow_melt_mode/set` payload `AUTO`
+- Some write operations can return `PERMISSION_DENIED` depending on dish firmware/account permissions.
 
 Status:
 - `{prefix}/status` retained `online`/`offline`
@@ -151,5 +155,5 @@ uv run --with-editable . starlink-taphome-bridge run --help
 - If you prefer module execution instead of the package entrypoint, use:
 
 ```sh
-uv run python -m starlink_taphome_bridge.cli run --help
+uv run starlink-taphome-bridge run --help
 ```

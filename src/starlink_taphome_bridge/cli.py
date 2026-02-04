@@ -8,7 +8,7 @@ import signal
 import socket
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 import click
 
@@ -42,17 +42,6 @@ def _default_client_id() -> str:
     return f"starlink-taphome-{seed.hex[:8]}"
 
 
-def _normalize_heater_mode(value: str) -> str:
-    lowered = value.strip().lower()
-    if lowered in {"1", "true", "on"}:
-        return "on"
-    if lowered in {"0", "false", "off"}:
-        return "off"
-    if lowered == "auto":
-        return "auto"
-    raise ValueError(f"Invalid heater mode: {value}")
-
-
 def _normalize_fields(values: tuple[str, ...]) -> tuple[str, ...]:
     normalized: list[str] = []
     for raw in values:
@@ -77,13 +66,8 @@ async def _run_bridge(config: RunConfig) -> None:
 
     starlink = StarlinkGrpcClient(config.dish)
 
-    async def on_command(payload: str) -> AppliedResult:
-        try:
-            normalized = _normalize_heater_mode(payload)
-        except ValueError as exc:
-            logger.warning("Invalid heater command payload: %s", payload)
-            return AppliedResult(requested=payload, applied=None, success=False, message=str(exc))
-        return await starlink.set_heater_mode(normalized)
+    async def on_command(field_path: str, payload: str) -> AppliedResult:
+        return await starlink.set_field(field_path, payload)
 
     bridge = MqttBridge(
         config=config.mqtt,
@@ -134,7 +118,7 @@ async def _run_bridge(config: RunConfig) -> None:
                 break
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     await asyncio.gather(connect_loop(), poll_loop())
@@ -244,8 +228,8 @@ def topics(topic_prefix: str) -> None:
         topics.status,
         f"{topic_prefix}/<grpc-field>",
         topics.all_fields,
-        topics.cmd_heater_set,
-        topics.cmd_heater_ack,
+        f"{topic_prefix}/<grpc-field>/set",
+        f"{topic_prefix}/<grpc-field>/ack",
     ):
         click.echo(topic)
 

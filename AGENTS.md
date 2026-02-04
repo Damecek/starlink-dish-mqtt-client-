@@ -15,7 +15,7 @@ This is a living document. Update it as the project evolves and new workflows, c
 - Alpine/uvx usage (from README):
   - `uvx starlink-taphome-bridge run --once --mqtt-host 192.168.1.10`.
 - If you use `uv` for local development, the module entrypoint works without installation:
-  - `PYTHONPATH=src uv run python -m starlink_taphome_bridge.cli run --help`.
+- `PYTHONPATH=src uv run starlink-taphome-bridge run --help`.
 - There is no build step beyond standard Python packaging (see `pyproject.toml`).
 
 ## Coding Style & Naming Conventions

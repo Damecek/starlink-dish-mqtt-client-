@@ -4,8 +4,9 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Iterable
+from typing import Any
 
 from gmqtt import Client as MqttClient
 from gmqtt import Message as MqttMessage
@@ -31,12 +32,14 @@ class Topics:
         return f"{self.prefix}/{path}"
 
     @property
-    def cmd_heater_set(self) -> str:
-        return f"{self.prefix}/cmd/heater_mode/set"
+    def wildcard(self) -> str:
+        return f"{self.prefix}/#"
 
-    @property
-    def cmd_heater_ack(self) -> str:
-        return f"{self.prefix}/cmd/heater_mode/ack"
+    def field_set(self, path: str) -> str:
+        return f"{self.field(path)}/set"
+
+    def field_ack(self, path: str) -> str:
+        return f"{self.field(path)}/ack"
 
 
 @dataclass
@@ -75,7 +78,7 @@ class MqttBridge:
         self,
         config: MqttConfig,
         topics: Topics,
-        on_command: Callable[[str], Awaitable[AppliedResult]],
+        on_command: Callable[[str, str], Awaitable[AppliedResult]],
         publish_json: bool,
         publish_missing: bool,
         field_filters: Iterable[str],
@@ -85,13 +88,16 @@ class MqttBridge:
         self._on_command = on_command
         self._publish_json = publish_json
         self._publish_missing = publish_missing
-        self._field_filters = tuple(self._normalize_filter(value) for value in field_filters if value)
+        self._field_filters = tuple(
+            self._normalize_filter(value) for value in field_filters if value
+        )
         self._warned_filters: set[str] = set()
         will_message = MqttMessage(self._topics.status, "offline", qos=config.qos, retain=True)
         self._client = MqttClient(config.client_id, will_message=will_message)
         self._connected = asyncio.Event()
         self._disconnected = asyncio.Event()
         self._last_payloads: dict[str, tuple[str, int | None, bool]] = {}
+        self._command_subscriptions = self._build_command_subscriptions()
         self._setup_client()
 
     def _setup_client(self) -> None:
@@ -108,7 +114,11 @@ class MqttBridge:
         self._client.on_disconnect = self._on_disconnect
 
     async def connect(self) -> None:
-        await self._client.connect(self._config.host, self._config.port, keepalive=self._config.keepalive)
+        await self._client.connect(
+            self._config.host,
+            self._config.port,
+            keepalive=self._config.keepalive,
+        )
 
     async def disconnect(self) -> None:
         await self._client.disconnect()
@@ -147,9 +157,11 @@ class MqttBridge:
             )
             await self.publish(self._topics.all_fields, payload)
 
-    async def publish_ack(self, result: AppliedResult) -> None:
+    async def publish_ack(self, field_path: str, result: AppliedResult) -> None:
+        ack_topic = self._topics.field_ack(field_path.replace(".", "/"))
         payload = json.dumps(
             {
+                "field": field_path,
                 "requested": result.requested,
                 "applied": result.applied,
                 "success": result.success,
@@ -158,7 +170,7 @@ class MqttBridge:
             },
             separators=(",", ":"),
         )
-        await self.publish(self._topics.cmd_heater_ack, payload)
+        await self.publish(ack_topic, payload)
 
     def _publish_if_value(self, topic: str, value: Any) -> None:
         if value is None and not self._publish_missing:
@@ -205,11 +217,18 @@ class MqttBridge:
             logger.warning("Requested gRPC field filter not found: %s", filt)
             self._warned_filters.add(filt)
 
-    def _on_connect(self, client: MqttClient, flags: dict[str, Any], rc: int, properties: Any) -> None:
+    def _on_connect(
+        self,
+        client: MqttClient,
+        flags: dict[str, Any],
+        rc: int,
+        properties: Any,
+    ) -> None:
         logger.info("Connected to MQTT broker")
         self._connected.set()
         self._disconnected.clear()
-        client.subscribe(self._topics.cmd_heater_set, qos=self._config.qos)
+        for topic in self._command_subscriptions:
+            client.subscribe(topic, qos=self._config.qos)
         asyncio.create_task(self.publish_status("online"))
         self._republish_cached()
 
@@ -222,20 +241,60 @@ class MqttBridge:
         self._connected.clear()
         self._disconnected.set()
 
-    def _on_message(self, client: MqttClient, topic: str, payload: bytes, qos: int, properties: Any) -> None:
+    def _on_message(
+        self,
+        client: MqttClient,
+        topic: str,
+        payload: bytes,
+        qos: int,
+        properties: Any,
+    ) -> None:
         text = payload.decode("utf-8").strip()
-        if topic == self._topics.cmd_heater_set:
-            logger.info("Received heater command: %s", text)
-            asyncio.create_task(self._handle_command(text))
+        field_path = self._extract_set_field(topic)
+        if field_path is None:
+            return
+        logger.info("Received command for %s: %s", field_path, text)
+        asyncio.create_task(self._handle_command(field_path, text))
 
-    async def _handle_command(self, payload: str) -> None:
-        result = await self._on_command(payload)
-        await self.publish_ack(result)
+    async def _handle_command(self, field_path: str, payload: str) -> None:
+        result = await self._on_command(field_path, payload)
+        if result.success:
+            logger.info("Applied %s=%s", field_path, result.applied)
+        else:
+            logger.warning("Failed to apply %s=%s: %s", field_path, payload, result.message)
+        await self.publish_ack(field_path, result)
+
+    def _build_command_subscriptions(self) -> tuple[str, ...]:
+        if not self._field_filters:
+            return (self._topics.wildcard,)
+        return tuple(
+            self._topics.field_set(field.replace(".", "/")) for field in self._field_filters
+        )
+
+    def _extract_set_field(self, topic: str) -> str | None:
+        prefix = f"{self._topics.prefix}/"
+        if not topic.startswith(prefix) or not topic.endswith("/set"):
+            return None
+        path = topic[len(prefix) : -len("/set")].strip("/")
+        if not path:
+            return None
+        return path.replace("/", ".")
 
     def iter_topics(self) -> Iterable[str]:
-        return (
+        topics: list[str] = [
             self._topics.status,
             self._topics.all_fields,
-            self._topics.cmd_heater_set,
-            self._topics.cmd_heater_ack,
+        ]
+        if self._field_filters:
+            for field in self._field_filters:
+                path = field.replace(".", "/")
+                topics.append(self._topics.field_set(path))
+                topics.append(self._topics.field_ack(path))
+            return tuple(topics)
+        topics.extend(
+            (
+                f"{self._topics.prefix}/<grpc-field>/set",
+                f"{self._topics.prefix}/<grpc-field>/ack",
+            )
         )
+        return tuple(topics)
